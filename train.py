@@ -189,8 +189,17 @@ section('Step 2 — nnUNet 数据集格式化')
 for d in [IMAGES_TR, IMAGES_TS, LABELS_TR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# 若 imagesTr/ 已有文件则跳过（避免重复复制）
-if list(IMAGES_TR.glob('*.nii*')):
+# 若 imagesTr/ 已有文件则跳过（避免重复复制）；--force-preprocess 时强制重做
+_already_formatted = bool(list(IMAGES_TR.glob('*.nii*')))
+
+if _already_formatted and args.force_preprocess:
+    info('--force-preprocess：清空已格式化数据，重新复制并对齐…')
+    for d in [IMAGES_TR, IMAGES_TS, LABELS_TR]:
+        shutil.rmtree(d)
+        d.mkdir(parents=True, exist_ok=True)
+    _already_formatted = False
+
+if _already_formatted:
     n_tr = len(list(IMAGES_TR.glob('*.nii*')))
     n_ts = len(list(IMAGES_TS.glob('*.nii*')))
     info(f'已格式化：{n_tr} 训练 / {n_ts} 测试，跳过复制。')
