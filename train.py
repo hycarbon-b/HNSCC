@@ -38,6 +38,12 @@ import argparse, json, shutil, math, random, subprocess
 
 # ── 第三方库导入 ────────────────────────────────────────────────
 try:
+    import nibabel as nib
+except ImportError:
+    print('[FAIL] nibabel 未安装。请运行：pip install nibabel')
+    sys.exit(1)
+
+try:
     import torch
 except ImportError:
     print('[FAIL] torch 未安装。请运行：uv pip install torch')
@@ -200,17 +206,37 @@ else:
 
     info(f'划分：{len(tr_idx)} 训练 / {len(ts_idx)} 测试（split={split_ratio:.0%}）')
 
+    def _copy_img(src: Path, dst: Path) -> None:
+        """直接复制图像文件。"""
+        shutil.copy2(src, dst)
+
+    def _copy_seg_aligned(img_src: Path, seg_src: Path, dst: Path) -> None:
+        """将 mask 的 affine/header 对齐到对应图像后写出，修正 origin/direction 不一致问题。"""
+        img_nib = nib.load(str(img_src))
+        seg_nib = nib.load(str(seg_src))
+        import numpy as np
+        # 若 affine 已一致则直接复制，避免不必要的重写
+        if np.allclose(img_nib.affine, seg_nib.affine, atol=1e-3):
+            shutil.copy2(seg_src, dst)
+            return
+        # 用图像的 affine 覆盖 mask 的 header，保留 voxel 数据不变
+        fixed = nib.Nifti1Image(seg_nib.get_fdata(dtype='float32').astype('uint8'),
+                                affine=img_nib.affine,
+                                header=img_nib.header)
+        fixed.header.set_data_dtype('uint8')
+        nib.save(fixed, str(dst))
+
     training_cases = []
     for cid, idx in enumerate(tr_idx, start=1):
-        base     = f'{DATASET_NAME}_{cid:04d}'
-        shutil.copy2(img_files[idx],  IMAGES_TR / f'{base}_0000.nii.gz')
-        shutil.copy2(mask_files[idx], LABELS_TR / f'{base}.nii.gz')
+        base = f'{DATASET_NAME}_{cid:04d}'
+        _copy_img(img_files[idx], IMAGES_TR / f'{base}_0000.nii.gz')
+        _copy_seg_aligned(img_files[idx], mask_files[idx], LABELS_TR / f'{base}.nii.gz')
         training_cases.append(base)
         info(f'  [TR] {img_files[idx].name} → {base}')
 
     for cid, idx in enumerate(ts_idx, start=n_train + 1):
         base = f'{DATASET_NAME}_{cid:04d}'
-        shutil.copy2(img_files[idx], IMAGES_TS / f'{base}_0000.nii.gz')
+        _copy_img(img_files[idx], IMAGES_TS / f'{base}_0000.nii.gz')
         info(f'  [TS] {img_files[idx].name} → {base}')
 
     ds_json = {
