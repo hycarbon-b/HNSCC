@@ -70,6 +70,15 @@ parser.add_argument('--config',  default=None,
                     help='nnUNet 配置：2d / 3d_fullres（默认由设备自动选择）')
 parser.add_argument('--force-preprocess', action='store_true',
                     help='强制重新运行 plan_and_preprocess')
+# WandB 参数
+parser.add_argument('--wandb', action='store_true',
+                    help='启用 Weights & Biases 训练监控')
+parser.add_argument('--wandb-project', default='hnscc-nnunet',
+                    help='WandB project 名称（默认 hnscc-nnunet）')
+parser.add_argument('--wandb-name', default=None,
+                    help='WandB run 名称（默认自动生成）')
+parser.add_argument('--wandb-tags', nargs='*', default=None,
+                    help='WandB 标签列表，用空格分隔')
 args = parser.parse_args()
 
 # ── CPU / GPU 检测与训练参数 ────────────────────────────────────
@@ -262,16 +271,113 @@ except ImportError as e:
     print(f'[FAIL] nnunetv2 导入失败: {e}')
     sys.exit(1)
 
-plans      = load_json(str(plans_file))
+
+# ── WandB Trainer 子类（仅在 --wandb 时使用）────────────────────
+class WandbNnUNetTrainer(nnUNetTrainer):
+    """在 nnUNetTrainer 基础上，每个 epoch 结束后将指标上报至 WandB。"""
+
+    def __init__(self, *args,
+                 wandb_project: str = 'hnscc-nnunet',
+                 wandb_name: str | None = None,
+                 wandb_tags: list | None = None,
+                 wandb_config: dict | None = None,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self._wb_project = wandb_project
+        self._wb_name    = wandb_name
+        self._wb_tags    = wandb_tags
+        self._wb_config  = wandb_config or {}
+        self._wandb      = None   # 延迟导入
+
+    def initialize(self):
+        super().initialize()
+        try:
+            import wandb as _wandb
+        except ImportError:
+            print('[WARN] wandb 未安装（pip install wandb），WandB 监控已禁用')
+            return
+        self._wandb = _wandb
+        self._wandb.init(
+            project=self._wb_project,
+            name=self._wb_name,
+            tags=self._wb_tags,
+            config={
+                'configuration':            self.configuration_name,
+                'fold':                     self.fold,
+                'num_epochs':               self.num_epochs,
+                'num_iterations_per_epoch': self.num_iterations_per_epoch,
+                'device':                   str(self.device),
+                'dataset_id':               DATASET_ID,
+                'dataset_name':             DATASET_NAME,
+                **self._wb_config,
+            },
+            resume='allow',
+        )
+        print(f'  [WandB] run: {self._wandb.run.url}')
+
+    def on_epoch_end(self):
+        """调用父类逻辑后，将当前 epoch 的指标推送至 WandB。"""
+        super().on_epoch_end()   # 注意：此调用后 self.current_epoch 已 +1
+        if self._wandb is None or self._wandb.run is None:
+            return
+        logs = self.logger.my_fantastic_logging
+        metrics: dict = {'epoch': self.current_epoch - 1}
+        # ── nnUNet logger 存储各 epoch 指标为列表，取最后一项 ──
+        for key, wb_key in [
+            ('train_losses',  'train_loss'),
+            ('val_losses',    'val_loss'),
+            ('mean_fg_dice',  'mean_fg_dice'),
+            ('ema_fg_dice',   'ema_fg_dice'),
+            ('lrs',           'lr'),
+        ]:
+            if logs.get(key):
+                metrics[wb_key] = logs[key][-1]
+        self._wandb.log(metrics)
+
+    def on_train_end(self):
+        super().on_train_end()
+        if self._wandb is not None and self._wandb.run is not None:
+            self._wandb.finish()
+            print('  [WandB] run 已结束')
+
+
+# ── 选择 Trainer 类 ────────────────────────────────────────────
+USE_WANDB = args.wandb
+TrainerClass = WandbNnUNetTrainer if USE_WANDB else nnUNetTrainer
+
+if USE_WANDB:
+    info(f'WandB   : 已启用  project={args.wandb_project}'
+         + (f'  name={args.wandb_name}' if args.wandb_name else ''))
+else:
+    info('WandB   : 未启用（加 --wandb 开启）')
+
+plans        = load_json(str(plans_file))
 dataset_json = load_json(str(DATASET_DIR / 'dataset.json'))
 
-trainer = nnUNetTrainer(
-    plans=plans,
-    configuration=CONFIGURATION,
-    fold=FOLD,
-    dataset_json=dataset_json,
-    device=DEVICE,
-)
+if USE_WANDB:
+    trainer = WandbNnUNetTrainer(
+        plans=plans,
+        configuration=CONFIGURATION,
+        fold=FOLD,
+        dataset_json=dataset_json,
+        device=DEVICE,
+        wandb_project=args.wandb_project,
+        wandb_name=args.wandb_name,
+        wandb_tags=args.wandb_tags,
+        wandb_config={
+            'epochs':      NUM_EPOCHS,
+            'iter_train':  NUM_ITER_TRAIN,
+            'iter_val':    NUM_ITER_VAL,
+        },
+    )
+else:
+    trainer = nnUNetTrainer(
+        plans=plans,
+        configuration=CONFIGURATION,
+        fold=FOLD,
+        dataset_json=dataset_json,
+        device=DEVICE,
+    )
 
 # 覆盖训练规模（必须在 initialize() 之前，LR 调度器会用到 num_epochs）
 trainer.num_epochs                   = NUM_EPOCHS

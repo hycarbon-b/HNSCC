@@ -8,6 +8,7 @@ dependencies = [
     "numpy",
     "matplotlib",
     "nnunetv2",
+    "wandb",
 ]
 
 [build-system]
