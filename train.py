@@ -276,21 +276,32 @@ except ImportError as e:
 class WandbNnUNetTrainer(nnUNetTrainer):
     """在 nnUNetTrainer 基础上，每个 epoch 结束后将指标上报至 WandB。"""
 
-    def __init__(self, *args,
-                 wandb_project: str = 'hnscc-nnunet',
-                 wandb_name: str | None = None,
-                 wandb_tags: list | None = None,
-                 wandb_config: dict | None = None,
-                 **kwargs):
-        super().__init__(*args, **kwargs)
-        self._wb_project = wandb_project
-        self._wb_name    = wandb_name
-        self._wb_tags    = wandb_tags
-        self._wb_config  = wandb_config or {}
-        self._wandb      = None   # 延迟导入
+    def setup_wandb(self,
+                    project: str = 'hnscc-nnunet',
+                    name: str | None = None,
+                    tags: list | None = None,
+                    config: dict | None = None):
+        """构造后调用，注入 WandB 配置（不放 __init__ 以避免 nnUNet 内省冲突）。"""
+        self._wb_project = project
+        self._wb_name    = name
+        self._wb_tags    = tags
+        self._wb_config  = config or {}
+        self._wandb      = None
+
+    def _ensure_wb_attrs(self):
+        """兼容 setup_wandb 未被调用的情况。"""
+        if not hasattr(self, '_wandb'):
+            self._wb_project = 'hnscc-nnunet'
+            self._wb_name    = None
+            self._wb_tags    = None
+            self._wb_config  = {}
+            self._wandb      = None
 
     def initialize(self):
         super().initialize()
+        self._ensure_wb_attrs()
+        if self._wandb is not None:
+            return  # 已初始化
         try:
             import wandb as _wandb
         except ImportError:
@@ -316,13 +327,13 @@ class WandbNnUNetTrainer(nnUNetTrainer):
         print(f'  [WandB] run: {self._wandb.run.url}')
 
     def on_epoch_end(self):
-        """调用父类逻辑后，将当前 epoch 的指标推送至 WandB。"""
+        """调用父类逻辑后，将当前 epoch 指标推送至 WandB。"""
         super().on_epoch_end()   # 注意：此调用后 self.current_epoch 已 +1
+        self._ensure_wb_attrs()
         if self._wandb is None or self._wandb.run is None:
             return
         logs = self.logger.my_fantastic_logging
         metrics: dict = {'epoch': self.current_epoch - 1}
-        # ── nnUNet logger 存储各 epoch 指标为列表，取最后一项 ──
         for key, wb_key in [
             ('train_losses',  'train_loss'),
             ('val_losses',    'val_loss'),
@@ -336,6 +347,7 @@ class WandbNnUNetTrainer(nnUNetTrainer):
 
     def on_train_end(self):
         super().on_train_end()
+        self._ensure_wb_attrs()
         if self._wandb is not None and self._wandb.run is not None:
             self._wandb.finish()
             print('  [WandB] run 已结束')
@@ -361,13 +373,15 @@ if USE_WANDB:
         fold=FOLD,
         dataset_json=dataset_json,
         device=DEVICE,
-        wandb_project=args.wandb_project,
-        wandb_name=args.wandb_name,
-        wandb_tags=args.wandb_tags,
-        wandb_config={
-            'epochs':      NUM_EPOCHS,
-            'iter_train':  NUM_ITER_TRAIN,
-            'iter_val':    NUM_ITER_VAL,
+    )
+    trainer.setup_wandb(
+        project=args.wandb_project,
+        name=args.wandb_name,
+        tags=args.wandb_tags,
+        config={
+            'epochs':     NUM_EPOCHS,
+            'iter_train': NUM_ITER_TRAIN,
+            'iter_val':   NUM_ITER_VAL,
         },
     )
 else:
