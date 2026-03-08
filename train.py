@@ -139,28 +139,40 @@ if not MASKS_SRC.is_dir():
     print(f'[FAIL] --masks 目录不存在: {MASKS_SRC}')
     sys.exit(1)
 
-img_files  = sorted(IMAGES_SRC.glob('*.nii.gz'))
-mask_files = sorted(MASKS_SRC.glob('*.nii.gz'))
+_img_map  = {f.name: f for f in IMAGES_SRC.glob('*.nii.gz')}
+_mask_map = {f.name: f for f in MASKS_SRC.glob('*.nii.gz')}
 
-if not img_files:
+if not _img_map:
     print(f'[FAIL] --images 目录中未找到 *.nii.gz 文件: {IMAGES_SRC}')
     sys.exit(1)
-if not mask_files:
+if not _mask_map:
     print(f'[FAIL] --masks 目录中未找到 *.nii.gz 文件: {MASKS_SRC}')
     sys.exit(1)
-if len(img_files) != len(mask_files):
-    print(f'[FAIL] 图像数量（{len(img_files)}）与 mask 数量（{len(mask_files)}）不一致')
+
+# 取交集：只保留同时有图像和 mask 的文件名
+_common_names = sorted(_img_map.keys() & _mask_map.keys())
+_only_img     = sorted(_img_map.keys() - _mask_map.keys())
+_only_mask    = sorted(_mask_map.keys() - _img_map.keys())
+
+if _only_img:
+    info(f'[WARN] 以下 {len(_only_img)} 个图像无对应 mask，已跳过：')
+    for n in _only_img:
+        info(f'       {n}')
+if _only_mask:
+    info(f'[WARN] 以下 {len(_only_mask)} 个 mask 无对应图像，已跳过：')
+    for n in _only_mask:
+        info(f'       {n}')
+
+if not _common_names:
+    print('[FAIL] images/ 与 masks/ 中无任何同名文件，无法组建样本库')
     sys.exit(1)
 
-for img, mask in zip(img_files, mask_files):
-    if img.name != mask.name:
-        print(f'[FAIL] 文件名不匹配: {img.name} vs {mask.name}')
-        print('       请确保 images/ 和 masks/ 目录中文件名完全相同（排序后一一对应）')
-        sys.exit(1)
+img_files  = [_img_map[n]  for n in _common_names]
+mask_files = [_mask_map[n] for n in _common_names]
 
-info(f'图像路径 : {IMAGES_SRC}')
-info(f'Mask 路径: {MASKS_SRC}')
-info(f'共 {len(img_files)} 个样本，文件名配对验证通过。')
+info(f'图像路径 : {IMAGES_SRC}  ({len(_img_map)} 个)')
+info(f'Mask 路径: {MASKS_SRC}  ({len(_mask_map)} 个)')
+info(f'有效样本 : {len(img_files)} 个（跳过 {len(_only_img)+len(_only_mask)} 个不完整）')
 
 
 # ════════════════════════════════════════════════════════════════
