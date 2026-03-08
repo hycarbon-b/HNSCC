@@ -29,6 +29,11 @@ uv pip install -e .
 # GPU full training (3d_fullres, 1000 epochs)
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python train.py \
     --images /path/to/images --masks /path/to/masks
+
+# GPU training with WandB monitoring
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python train.py \
+    --images /path/to/images --masks /path/to/masks \
+    --wandb --wandb-project hnscc-nnunet --wandb-name fold0-3d-run1
 ```
 
 `--images` and `--masks` must contain matching `*.nii.gz` filenames (sorted order).
@@ -44,6 +49,29 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python train.py \
 | `--epochs` | auto | Override epoch count |
 | `--config` | auto | Override nnUNet config (`2d` / `3d_fullres`) |
 | `--force-preprocess` | — | Re-run plan_and_preprocess |
+| `--wandb` | — | Enable Weights & Biases monitoring |
+| `--wandb-project` | hnscc-nnunet | WandB project name |
+| `--wandb-name` | auto | WandB run name |
+| `--wandb-tags` | — | Space-separated tags, e.g. `3d_fullres fold0` |
+
+## WandB Monitoring
+
+Per-epoch metrics logged to [wandb.ai](https://wandb.ai):
+
+| Metric | Description |
+|--------|-------------|
+| `train_loss` | Training loss |
+| `val_loss` | Validation loss |
+| `mean_fg_dice` | Mean foreground Dice |
+| `ema_fg_dice` | EMA-smoothed Dice (used for best checkpoint selection) |
+| `lr` | Learning rate |
+
+**First-time setup** (one-time login):
+```bash
+.venv/bin/python -c "import wandb; wandb.login()"
+```
+
+WandB is fully opt-in — omitting `--wandb` leaves the training pipeline unchanged.
 
 ## Output
 
